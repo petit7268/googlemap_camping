@@ -8,14 +8,15 @@ the results to a GPX file with distance information.
 import json
 import math
 import os
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
 import gpxpy
-import gpxpy.gpx
 import requests
 from dotenv import load_dotenv
+from gpxpy.gpx import GPX, GPXWaypoint
 
 API_URL: str = "https://places.googleapis.com/v1/places:searchNearby"
 
@@ -54,7 +55,7 @@ def read_gpx(file_path: str | Path) -> list[Coordinate]:
     path: Path = Path(file_path)
 
     with path.open(encoding="utf-8") as file:
-        gpx: gpxpy.gpx.GPX = gpxpy.parse(file)
+        gpx: GPX = gpxpy.parse(file)
 
     coordinates: list[Coordinate] = []
 
@@ -242,7 +243,7 @@ def request_campground_data(
         requests.HTTPError: If the API request fails
     """
     payload: dict[str, Any] = {
-        "includedTypes": ["campground"],
+        "includedTypes": ["campground", "rv_park"],
         "maxResultCount": MAX_RESULTS,
         "rankPreference": "DISTANCE",
         "locationRestriction": {
@@ -274,16 +275,35 @@ def request_campground_data(
 
     reserve_request()
 
-    response: requests.Response = session.post(
-        API_URL,
-        headers=headers,
-        json=payload,
-        timeout=30,
-    )
+    max_retries: int = 3
+    retry_delay: float = 1.0
 
-    response.raise_for_status()
+    for attempt in range(max_retries):
+        try:
+            response: requests.Response = session.post(
+                API_URL,
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
 
-    return response.json()
+            response.raise_for_status()
+
+            return response.json()
+        except requests.exceptions.SSLError:
+            if attempt < max_retries - 1:
+                print(f"SSL error, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                raise
+        except requests.exceptions.RequestException:
+            if attempt < max_retries - 1:
+                print(f"Request error, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2
+            else:
+                raise
 
 
 def search_campgrounds(
@@ -319,6 +339,72 @@ def search_campgrounds(
     return data.get("places", [])
 
 
+def convert_responses_to_gpx(responses: dict[str, dict[str, Any]]) -> GPX:
+    """Convert Google Places API responses to a GPX object with waypoints.
+
+    Args:
+        responses: Dictionary mapping place IDs to place data
+
+    Returns:
+        GPX object containing waypoints for each place
+    """
+    gpx: GPX = GPX()
+
+    for place in responses.values():
+        location: dict[str, float] = place.get("location", {})
+        lat: float = location.get("latitude", 0.0)
+        lon: float = location.get("longitude", 0.0)
+
+        if lat == 0.0 and lon == 0.0:
+            continue
+
+        waypoint: GPXWaypoint = GPXWaypoint(
+            latitude=lat,
+            longitude=lon
+        )
+
+        # Set name from displayName
+        display_name: dict[str, str] = place.get("displayName", {})
+        waypoint.name = display_name.get("text", "Unknown")
+
+        # Build description with available information
+        description_parts: list[str] = []
+
+        address: str = place.get("formattedAddress", "")
+        if address:
+            description_parts.append(f"Address: {address}")
+
+        phone: str = place.get("internationalPhoneNumber", "") or place.get(
+            "nationalPhoneNumber", ""
+        )
+        if phone:
+            description_parts.append(f"Phone: {phone}")
+
+        website: str = place.get("websiteUri", "")
+        if website:
+            description_parts.append(f"Website: {website}")
+
+        rating: float = place.get("rating", 0.0)
+        if rating > 0.0:
+            description_parts.append(f"Rating: {rating}")
+
+        # Add opening hours if available
+        opening_hours: dict[str, Any] = place.get("currentOpeningHours", {})
+        if opening_hours:
+            weekday_descriptions: list[str] = opening_hours.get(
+                "weekdayDescriptions", []
+            )
+            if weekday_descriptions:
+                description_parts.extend(weekday_descriptions)
+
+        if description_parts:
+            waypoint.description = "\n".join(description_parts)
+
+        gpx.waypoints.append(waypoint)
+
+    return gpx
+
+
 def main() -> None:
     """Main entry point for the campground finder.
 
@@ -328,7 +414,7 @@ def main() -> None:
     load_dotenv()
 
     gpx_file: Path = Path("/Users/petit7268/py/googlemap_camping/files/Portugal Espagne euro velo.gpx")
-    output_file: Path = Path("campgrounds_from_google.gpx")
+    output_file: Path = Path("./files/campgrounds_from_google.gpx")
     interval_km: float = DEFAULT_INTERVAL_KM
     radius_km: float = DEFAULT_RADIUS_KM
 
@@ -346,17 +432,15 @@ def main() -> None:
         gpx_file
     )
 
-    print(f"GPX points: {len(coordinates)}")
-
     samples: list[Coordinate] = sample_route_at_interval(
         coordinates,
         interval_km * 1000.0,
     )
 
-    print(f"Sampled coordinates: {len(samples)}")
+    responses: dict[str, dict[str, Any]] = {}
 
-    for sample in samples:
-        print(f"Sample: {sample}")
+    for i, sample in enumerate(samples, start=1):
+        print(f"Processing {i}/{len(samples)}")
         response = request_campground_data(
             session=requests.Session(),
             latitude=sample["latitude"],
@@ -364,10 +448,21 @@ def main() -> None:
             radius_m=radius_km * 1000.0,
             api_key=api_key,
         )
-        print(f"Response: {response}")
-        break
 
+        for place in response.get("places", []):
+            place_id: str = place.get("id", "")
+            if place_id:
+                responses[place_id] = place
 
+    # format the responses to a GPX file
+    gpx: GPX = convert_responses_to_gpx(responses)
+
+    # Print the GPX file
+    print(gpx.to_xml())
+
+    # save to file
+    with output_file.open("w", encoding="utf-8") as f:
+        f.write(gpx.to_xml())
 
     print(
         "Monthly API requests counted: "
