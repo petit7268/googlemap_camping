@@ -5,11 +5,10 @@ It samples points along the route, searches for nearby campgrounds, and exports
 the results to a GPX file with distance information.
 """
 
-import json
+
 import math
 import os
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -19,9 +18,6 @@ from dotenv import load_dotenv
 from gpxpy.gpx import GPX, GPXWaypoint
 
 API_URL: str = "https://places.googleapis.com/v1/places:searchNearby"
-
-MONTHLY_REQUEST_LIMIT: int = 4500
-USAGE_FILE: Path = Path.home() / ".google_camping_api_usage.json"
 
 DEFAULT_INTERVAL_KM: float = 3.0
 DEFAULT_RADIUS_KM: float = 5.0
@@ -87,7 +83,7 @@ def read_gpx(file_path: str | Path) -> list[Coordinate]:
     return coordinates
 
 
-def haversine(
+def get_distance_using_haversine(
     point_a: Coordinate,
     point_b: Coordinate,
 ) -> float:
@@ -137,7 +133,7 @@ def sample_route_at_interval(
     previous: Coordinate = coordinates[0]
 
     for current in coordinates[1:]:
-        segment_length: float = haversine(previous, current)
+        segment_length: float = get_distance_using_haversine(previous, current)
 
         while distance_since_sample + segment_length >= interval_m:
             if segment_length <= 0:
@@ -157,67 +153,16 @@ def sample_route_at_interval(
 
             samples.append(new_point)
             previous = new_point
-            segment_length = haversine(previous, current)
+            segment_length = get_distance_using_haversine(previous, current)
             distance_since_sample = 0.0
 
         distance_since_sample += segment_length
         previous = current
 
-    if haversine(samples[-1], coordinates[-1]) > 1.0:
+    if get_distance_using_haversine(samples[-1], coordinates[-1]) > 1.0:
         samples.append(coordinates[-1])
 
     return samples
-
-
-def load_usage() -> UsageData:
-    """Read the request count for the current UTC calendar month.
-
-    Returns:
-        UsageData dictionary with month and request count
-    """
-    current_month: str = datetime.now(
-        UTC
-    ).strftime("%Y-%m")
-
-    if USAGE_FILE.exists():
-        data: UsageData = json.loads(
-            USAGE_FILE.read_text(encoding="utf-8")
-        )
-
-        if data.get("month") == current_month:
-            return data
-
-    return {
-        "month": current_month,
-        "requests": 0,
-    }
-
-
-def reserve_request() -> int:
-    """Reserve one request before calling Google Places.
-
-    Returns:
-        The new request count after incrementing
-
-    Raises:
-        RuntimeError: If monthly request limit is exceeded
-    """
-    usage: UsageData = load_usage()
-
-    if usage["requests"] >= MONTHLY_REQUEST_LIMIT:
-        raise RuntimeError(
-            "Monthly request safety limit reached: "
-            f"{MONTHLY_REQUEST_LIMIT}"
-        )
-
-    usage["requests"] += 1
-
-    USAGE_FILE.write_text(
-        json.dumps(usage, indent=2),
-        encoding="utf-8",
-    )
-
-    return usage["requests"]
 
 
 def request_campground_data(
@@ -273,7 +218,7 @@ def request_campground_data(
         "Content-Type": "application/json",
     }
 
-    reserve_request()
+
 
     max_retries: int = 3
     retry_delay: float = 1.0
@@ -463,11 +408,6 @@ def main() -> None:
     # save to file
     with output_file.open("w", encoding="utf-8") as f:
         f.write(gpx.to_xml())
-
-    print(
-        "Monthly API requests counted: "
-        f"{load_usage()['requests']}"
-    )
 
 
 if __name__ == "__main__":
