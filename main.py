@@ -243,7 +243,7 @@ def get_googlemap_item_near_gpx(
     responses: dict[str, dict[str, Any]] = {}
 
     for i, sample in enumerate(gpx_samples, start=1):
-        print(f"Processing {i}/{len(gpx_samples)}")
+        print(f"Processing {included_types} {i}/{len(gpx_samples)}")
 
         payload: dict[str, Any] = {
             "includedTypes": included_types,
@@ -316,6 +316,8 @@ def get_googlemap_item_near_gpx(
             if place_id:
                 responses[place_id] = place
         
+        # wait  0.2 seconds to avoid rate limiting
+        time.sleep(0.2)
     return responses
 
 
