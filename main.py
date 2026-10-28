@@ -5,7 +5,6 @@ It samples points along the route, searches for nearby campgrounds, and exports
 the results to a GPX file with distance information.
 """
 
-
 import math
 import os
 import time
@@ -19,21 +18,12 @@ from gpxpy.gpx import GPX, GPXWaypoint
 
 API_URL: str = "https://places.googleapis.com/v1/places:searchNearby"
 
-DEFAULT_INTERVAL_KM: float = 3.0
-DEFAULT_RADIUS_KM: float = 5.0
-MAX_RESULTS: int = 20
-
 
 class Coordinate(TypedDict):
     """Geographic coordinate with latitude and longitude."""
+
     latitude: float
     longitude: float
-
-
-class UsageData(TypedDict):
-    """Data structure for tracking API usage by month."""
-    month: str
-    requests: int
 
 
 def read_gpx(file_path: str | Path) -> list[Coordinate]:
@@ -59,20 +49,14 @@ def read_gpx(file_path: str | Path) -> list[Coordinate]:
         for segment in track.segments:
             for point in segment.points:
                 coordinates.append(
-                    {
-                        "latitude": point.latitude,
-                        "longitude": point.longitude
-                    }
+                    {"latitude": point.latitude, "longitude": point.longitude}
                 )
 
     if not coordinates:
         for route in gpx.routes:
             for point in route.points:
                 coordinates.append(
-                    {
-                        "latitude": point.latitude,
-                        "longitude": point.longitude
-                    }
+                    {"latitude": point.latitude, "longitude": point.longitude}
                 )
 
     if len(coordinates) < 2:
@@ -104,14 +88,10 @@ def get_distance_using_haversine(
 
     value: float = (
         math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1)
-        * math.cos(lat2)
-        * math.sin(delta_lon / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
     )
 
-    return 6371000.0 * 2 * math.asin(
-        min(1.0, math.sqrt(value))
-    )
+    return 6371000.0 * 2 * math.asin(min(1.0, math.sqrt(value)))
 
 
 def sample_route_at_interval(
@@ -139,10 +119,7 @@ def sample_route_at_interval(
             if segment_length <= 0:
                 break
 
-            fraction: float = (
-                (interval_m - distance_since_sample)
-                / segment_length
-            )
+            fraction: float = (interval_m - distance_since_sample) / segment_length
 
             new_point: Coordinate = {
                 "latitude": previous["latitude"]
@@ -165,125 +142,6 @@ def sample_route_at_interval(
     return samples
 
 
-def request_campground_data(
-    session: requests.Session,
-    latitude: float,
-    longitude: float,
-    radius_m: float,
-    api_key: str,
-) -> dict[str, Any]:
-    """Request campground data from Google Places API and return raw JSON.
-
-    Args:
-        session: Requests session for HTTP calls
-        latitude: Center latitude for search
-        longitude: Center longitude for search
-        radius_m: Search radius in meters
-        api_key: Google Maps API key
-
-    Returns:
-        Full JSON response from Google Places API
-
-    Raises:
-        requests.HTTPError: If the API request fails
-    """
-    payload: dict[str, Any] = {
-        "includedTypes": ["campground", "rv_park"],
-        "maxResultCount": MAX_RESULTS,
-        "rankPreference": "DISTANCE",
-        "locationRestriction": {
-            "circle": {
-                "center": {
-                    "latitude": latitude,
-                    "longitude": longitude,
-                },
-                "radius": radius_m,
-            }
-        },
-    }
-
-    headers: dict[str, str] = {
-        "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": (
-            "places.id,"
-            "places.displayName,"
-            "places.location,"
-            "places.formattedAddress,"
-            "places.nationalPhoneNumber,"
-            "places.websiteUri,"
-            "places.rating,"
-            "places.internationalPhoneNumber,"
-            "places.currentOpeningHours"
-        ),
-        "Content-Type": "application/json",
-    }
-
-
-
-    max_retries: int = 3
-    retry_delay: float = 1.0
-
-    for attempt in range(max_retries):
-        try:
-            response: requests.Response = session.post(
-                API_URL,
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
-
-            response.raise_for_status()
-
-            return response.json()
-        except requests.exceptions.SSLError:
-            if attempt < max_retries - 1:
-                print(f"SSL error, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                raise
-        except requests.exceptions.RequestException:
-            if attempt < max_retries - 1:
-                print(f"Request error, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
-                time.sleep(retry_delay)
-                retry_delay *= 2
-            else:
-                raise
-
-
-def search_campgrounds(
-    session: requests.Session,
-    latitude: float,
-    longitude: float,
-    radius_m: float,
-    api_key: str,
-) -> list[dict[str, Any]]:
-    """Search for campgrounds using Google Places Nearby Search (New).
-
-    Args:
-        session: Requests session for HTTP calls
-        latitude: Center latitude for search
-        longitude: Center longitude for search
-        radius_m: Search radius in meters
-        api_key: Google Maps API key
-
-    Returns:
-        List of place dictionaries from Google Places API
-
-    Raises:
-        requests.HTTPError: If the API request fails
-    """
-    data: dict[str, Any] = request_campground_data(
-        session,
-        latitude,
-        longitude,
-        radius_m,
-        api_key,
-    )
-
-    return data.get("places", [])
-
-
 def convert_responses_to_gpx(responses: dict[str, dict[str, Any]]) -> GPX:
     """Convert Google Places API responses to a GPX object with waypoints.
 
@@ -303,10 +161,7 @@ def convert_responses_to_gpx(responses: dict[str, dict[str, Any]]) -> GPX:
         if lat == 0.0 and lon == 0.0:
             continue
 
-        waypoint: GPXWaypoint = GPXWaypoint(
-            latitude=lat,
-            longitude=lon
-        )
+        waypoint: GPXWaypoint = GPXWaypoint(latitude=lat, longitude=lon)
 
         # Set name from displayName
         display_name: dict[str, str] = place.get("displayName", {})
@@ -350,64 +205,190 @@ def convert_responses_to_gpx(responses: dict[str, dict[str, Any]]) -> GPX:
     return gpx
 
 
-def main() -> None:
-    """Main entry point for the campground finder.
+def get_api_key(env_var_name: str = "GOOGLE_MAPS_API_KEY") -> str:
+    """Load environment variables and return the API key.
 
-    Reads the GPX file, samples coordinates at fixed intervals,
-    queries the API for each coordinate, and exports results to a GPX file.
+    Args:
+        env_var_name: Name of the environment variable containing the API key
+
+    Returns:
+        The API key value
+
+    Raises:
+        RuntimeError: If the environment variable is not defined
     """
     load_dotenv()
 
-    gpx_file: Path = Path("/Users/petit7268/py/googlemap_camping/files/Portugal Espagne euro velo.gpx")
-    output_file: Path = Path("./files/campgrounds_from_google.gpx")
-    interval_km: float = DEFAULT_INTERVAL_KM
-    radius_km: float = DEFAULT_RADIUS_KM
-
-    api_key: str | None = os.environ.get(
-        "GOOGLE_MAPS_API_KEY"
-    )
+    api_key: str | None = os.environ.get(env_var_name)
 
     if not api_key:
-        raise RuntimeError(
-            "Environment variable "
-            "GOOGLE_MAPS_API_KEY is not defined."
-        )
+        raise RuntimeError(f"Environment variable {env_var_name} is not defined.")
 
-    coordinates: list[Coordinate] = read_gpx(
-        gpx_file
-    )
+    return api_key
+
+
+def get_googlemap_item_near_gpx(
+    gpx_samples: list[Coordinate], radius_km: float, api_key: str, included_types: str
+) -> dict[str, dict[str, Any]]:
+    """Process sample coordinates and collect campground data.
+
+    Args:
+        gpx_samples: List of coordinate samples to process
+        radius_km: Search radius in kilometers
+        api_key: Google Maps API key
+    """
+
+    max_results: int = 20
+
+    responses: dict[str, dict[str, Any]] = {}
+
+    for i, sample in enumerate(gpx_samples, start=1):
+        print(f"Processing {i}/{len(gpx_samples)}")
+
+        payload: dict[str, Any] = {
+            "includedTypes": included_types,
+            "maxResultCount": max_results,
+            "rankPreference": "DISTANCE",
+            "locationRestriction": {
+                "circle": {
+                    "center": {
+                        "latitude": sample["latitude"],
+                        "longitude": sample["longitude"],
+                    },
+                    "radius": radius_km * 1000.0,
+                }
+            },
+        }
+
+        headers: dict[str, str] = {
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": (
+                "places.id,"
+                "places.displayName,"
+                "places.location,"
+                "places.formattedAddress,"
+                "places.nationalPhoneNumber,"
+                "places.websiteUri,"
+                "places.rating,"
+                "places.internationalPhoneNumber,"
+                "places.currentOpeningHours"
+            ),
+            "Content-Type": "application/json",
+        }
+
+        max_retries: int = 3
+        retry_delay: float = 1.0
+
+        for attempt in range(max_retries):
+            try:
+                response: requests.Response = requests.Session().post(
+                    API_URL,
+                    headers=headers,
+                    json=payload,
+                    timeout=30,
+                )
+
+                response.raise_for_status()
+
+                response_data: dict[str, Any] = response.json()
+                break
+            except requests.exceptions.SSLError:
+                if attempt < max_retries - 1:
+                    print(
+                        f"SSL error, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    raise
+            except requests.exceptions.RequestException:
+                if attempt < max_retries - 1:
+                    print(
+                        f"Request error, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})"
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    raise
+
+        for place in response_data.get("places", []):
+            place_id: str = place.get("id", "")
+            if place_id:
+                responses[place_id] = place
+        
+    return responses
+
+
+def save_response_to_gpx(
+    responses: dict[str, dict[str, Any]],
+    output_file: Path,
+) -> None:
+    """Convert responses to GPX and save to file.
+
+    Args:
+        responses: Dictionary of place data
+        output_file: Path to save the GPX file
+    """
+    gpx: GPX = convert_responses_to_gpx(responses)
+
+    print(gpx.to_xml())
+    # create output directory if it doesn't exist
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    with output_file.open("w", encoding="utf-8") as f:
+        f.write(gpx.to_xml())
+
+
+def get_googlemap_items(
+    gpx_file: Path = Path(
+        "/Users/petit7268/py/googlemap_camping/files/Portugal Espagne euro velo.gpx"
+    ),
+    output_path: Path = Path("./files/output/"),
+    interval_km: float = 3,
+    radius_km: float = 10,
+) -> None:
+    """Get data from Google Maps API.
+
+    Args:
+        gpx_file: Path to the input GPX file
+        output_file: Path to save the output GPX file
+        interval_km: Sampling interval in kilometers
+        radius_km: Search radius in kilometers
+    """
+
+    api_key: str = get_api_key()
+
+    coordinates: list[Coordinate] = read_gpx(gpx_file)
 
     samples: list[Coordinate] = sample_route_at_interval(
         coordinates,
         interval_km * 1000.0,
     )
 
-    responses: dict[str, dict[str, Any]] = {}
-
-    for i, sample in enumerate(samples, start=1):
-        print(f"Processing {i}/{len(samples)}")
-        response = request_campground_data(
-            session=requests.Session(),
-            latitude=sample["latitude"],
-            longitude=sample["longitude"],
-            radius_m=radius_km * 1000.0,
+    search_items: list[str] = [
+        "campground",
+        "rv_park",
+        "convenience_store",
+        "supermarket",
+    ]
+    for search_item in search_items:
+        responses: dict[str, dict[str, Any]] = get_googlemap_item_near_gpx(
+            gpx_samples=samples,
+            radius_km=radius_km,
             api_key=api_key,
+            included_types=search_item,
         )
 
-        for place in response.get("places", []):
-            place_id: str = place.get("id", "")
-            if place_id:
-                responses[place_id] = place
+        output_file = output_path / f"{search_item}_from_google.gpx"
+        save_response_to_gpx(responses, output_file)
 
-    # format the responses to a GPX file
-    gpx: GPX = convert_responses_to_gpx(responses)
 
-    # Print the GPX file
-    print(gpx.to_xml())
+def main() -> None:
+    """Main entry point for the campground finder.
 
-    # save to file
-    with output_file.open("w", encoding="utf-8") as f:
-        f.write(gpx.to_xml())
+    Reads the GPX file, samples coordinates at fixed intervals,
+    queries the API for each coordinate, and exports results to a GPX file.
+    """
+    get_googlemap_items()
 
 
 if __name__ == "__main__":
